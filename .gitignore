@@ -1,0 +1,48 @@
+# Environments
+.venv/
+venv/
+env/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Telegram session files
+.telegram_session*
+*.session
+*.session-journal
+
+# Database
+db/copilot.db
+db/*.db-journal
+db/*.db-wal
+db/*.db-shm
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Model artifacts (large, regenerable)
+models/
+*.pt
+*.bin
+*.safetensors
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs
+*.log
+logs/

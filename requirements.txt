@@ -1,0 +1,19 @@
+# NOTE: Install PyTorch separately with the CUDA-matched wheel from
+# https://pytorch.org (the RTX 3050 needs the CUDA build, not the PyPI CPU one).
+# Example (CUDA 12.1):
+#   pip install torch==2.4.0 --index-url https://download.pytorch.org/whl/cu121
+
+playwright==1.47.0
+beautifulsoup4==4.12.3
+telethon==1.36.0
+pandas==2.2.2
+numpy==1.26.4
+scikit-learn==1.5.1
+xgboost==2.1.1
+transformers==4.44.2
+datasets==2.21.0
+streamlit==1.38.0
+python-dotenv==1.0.1
+rapidfuzz==3.9.6
+tqdm==4.66.5
+google-generativeai==0.7.2
