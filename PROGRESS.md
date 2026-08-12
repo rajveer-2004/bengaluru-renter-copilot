@@ -2,7 +2,7 @@
 
 Living document. Updated after every meaningful step so a new chat session can pick up with full context. **Read this top-to-bottom before continuing work.**
 
-Last updated: 2026-08-12 (Step 2 DONE — 17 listings scraped, moving to Step 3)
+Last updated: 2026-08-12 (Step 3 DONE — regex baseline extracted 17 listings, moving to Step 4)
 
 ---
 
@@ -92,7 +92,7 @@ bengaluru-renter-copilot/
 
 1. ✅ Setup & verify env (git, venv, deps, playwright, init_db → 8 tables)
 2. ✅ **NoBroker scraper** — working. Dry-run confirmed card parsing. Real run wrote 17 unique listings to DB under `run_id=1` (30 scraped, 13 SHA256-deduped as cross-locality overlaps).
-3. 🟡 **Regex baseline extractor** — up next
+3. ✅ **Regex baseline extractor** — done. 17 rows in `extractions` with `extractor='regex-v1'`. Latency 0.4-2.1ms per listing. Catches `tenant_pref=family` and `is_owner=1` reliably (from NoBroker's structured labels); `veg_only`, `negotiable`, `lock_in_months` correctly all None (NoBroker cards don't advertise these — Telegram data would).
 
 4. ⏳ Gemini Flash extractor → `extractions` w/ `extractor='gemini-flash'`, track cost/latency
 5. ⏳ Labeling harness → `data/labeled_v1.jsonl`, ~500 examples
@@ -175,7 +175,13 @@ Known parsing gaps (fix later, not blockers):
 
 ## Next action
 
-Step 3: Regex baseline extractor. Reads from `raw_listings`, extracts tenant_pref / veg_only / is_owner / negotiable / lock_in_months / amenities_json into `extractions` with `extractor='regex-v1'`. Also improves locality parsing (grab from URL slug rather than search query). This is the cheapest baseline — sets the floor the DistilBERT model must beat.
+Step 4: Gemini Flash extractor. Uses Google Gemini 1.5 Flash via the free tier (15 req/min, 1M tokens/day) as the "ceiling" of the benchmark. Sends the listing's `raw_text` + a JSON-schema prompt asking for the same 6 fields the regex baseline outputs, plus tracks `latency_ms` and `cost_usd` per call. Writes to `extractions` with `extractor='gemini-flash'`. Needs `GEMINI_API_KEY` in `.env` (user grabs from https://aistudio.google.com/apikey).
+
+**Step 3 session notes:**
+- User first tried extracting via File Explorer's Extract wizard; hit the "Replace or Skip" dialog. Confirmed .gitkeep files are 0-byte identical, safe to replace. Also gave the `Expand-Archive -Force` PowerShell fallback for future zips.
+- Dry-preview via `--show --limit 5` confirmed extraction shape; then real run wrote 17 rows.
+- Verified via `SELECT COUNT(1) FROM extractions` → 17.
+- Committed as `Step 3: regex baseline extractor (17 listings, regex-v1)`.
 
 ## How I keep this file current
 
