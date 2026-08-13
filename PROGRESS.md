@@ -2,7 +2,7 @@
 
 Living document. Updated after every meaningful step so a new chat session can pick up with full context. **Read this top-to-bottom before continuing work.**
 
-Last updated: 2026-08-12 (Step 3 DONE — regex baseline extracted 17 listings, moving to Step 4)
+Last updated: 2026-08-13 (Step 4 DONE — Gemini Flash extracted all 17 listings for $0.00487, moving to Step 5)
 
 ---
 
@@ -93,6 +93,7 @@ bengaluru-renter-copilot/
 1. ✅ Setup & verify env (git, venv, deps, playwright, init_db → 8 tables)
 2. ✅ **NoBroker scraper** — working. Dry-run confirmed card parsing. Real run wrote 17 unique listings to DB under `run_id=1` (30 scraped, 13 SHA256-deduped as cross-locality overlaps).
 3. ✅ **Regex baseline extractor** — done. 17 rows in `extractions` with `extractor='regex-v1'`. Latency 0.4-2.1ms per listing. Catches `tenant_pref=family` and `is_owner=1` reliably (from NoBroker's structured labels); `veg_only`, `negotiable`, `lock_in_months` correctly all None (NoBroker cards don't advertise these — Telegram data would).
+4. ✅ **Gemini Flash extractor** — done. 17 rows in `extractions` with `extractor='gemini-flash'`, model=`gemini-3.5-flash`. Latency 3.8-11.3s per call (avg ~5.7s), total cost **$0.00487** for 17 listings. Interesting finding: on NoBroker card text Gemini's output matches regex-v1 exactly on most fields — expected because the card text is labels-only with no ambiguity. The regex-vs-Gemini gap will only surface on unstructured text (Telegram, or listing detail pages). Worth remembering for Step 7 benchmark write-up.
 
 4. ⏳ Gemini Flash extractor → `extractions` w/ `extractor='gemini-flash'`, track cost/latency
 5. ⏳ Labeling harness → `data/labeled_v1.jsonl`, ~500 examples
@@ -175,7 +176,28 @@ Known parsing gaps (fix later, not blockers):
 
 ## Next action
 
-Step 4: Gemini Flash extractor. Uses Google Gemini 1.5 Flash via the free tier (15 req/min, 1M tokens/day) as the "ceiling" of the benchmark. Sends the listing's `raw_text` + a JSON-schema prompt asking for the same 6 fields the regex baseline outputs, plus tracks `latency_ms` and `cost_usd` per call. Writes to `extractions` with `extractor='gemini-flash'`. Needs `GEMINI_API_KEY` in `.env` (user grabs from https://aistudio.google.com/apikey).
+**Step 5: Labeling harness (blocking Step 6-7).**
+
+To fine-tune DistilBERT and to benchmark all three extractors we need ground-truth labels for ~30-100 listings. Build a small CLI (`extraction/label.py`) that:
+1. Pulls unlabeled listings from `raw_listings`
+2. Shows the raw text
+3. Prompts for each extractable field (tenant_pref, veg_only, is_owner, negotiable, lock_in_months, amenities as comma-separated tags)
+4. Writes to `data/labeled_v1.jsonl`
+
+For the small NoBroker dataset (17 listings) we can hand-label all of them fast. Once we have Telegram data too, we scale up to ~500.
+
+**Then Steps 6-14 flow:** DistilBERT fine-tune → benchmark harness → localities seed → XGBoost pricing → Streamlit → HF deploy → Power BI → GitHub Actions cron.
+
+**Model debugging notes (Step 4 saga):**
+- `gemini-1.5-flash` → 404 (retired on v1beta for fresh keys, 2025)
+- `gemini-2.5-flash` → 404 "no longer available to new users" (mid-2025 restrictions)
+- `gemini-3.5-flash` → JSON parse error initially (reasoning tokens ate the 400-token output budget)
+- `gemini-3.5-flash` + `max_output_tokens=2048` → **working**. Kept.
+
+**Available Gemini models on user's key** (from `list_models()` diagnostic):
+`gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.5-flash-lite`, `gemini-3-flash-preview`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.6-flash`, `gemini-3.1-flash-lite`, plus various preview/image/tts variants. If 3.5-flash ever deprecates, next fallback is `gemini-3.5-flash-lite` (cheaper) or `gemini-3.6-flash`.
+
+**Cost note:** stored `cost_usd` in extractions is the *hypothetical paid-tier cost* from token counts × pricing constants ($0.30/$2.50 per 1M in/out). Actual out-of-pocket = **$0** while under free tier (15 RPM, 1M tokens/day). Even at 10k listings/week paid-tier cost would be ~$3/mo.
 
 **Step 3 session notes:**
 - User first tried extracting via File Explorer's Extract wizard; hit the "Replace or Skip" dialog. Confirmed .gitkeep files are 0-byte identical, safe to replace. Also gave the `Expand-Archive -Force` PowerShell fallback for future zips.
