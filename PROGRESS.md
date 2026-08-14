@@ -2,7 +2,7 @@
 
 Living document. Updated after every meaningful step so a new chat session can pick up with full context. **Read this top-to-bottom before continuing work.**
 
-Last updated: 2026-08-13 (Step 4 DONE — Gemini Flash extracted all 17 listings for $0.00487, moving to Step 5)
+Last updated: 2026-08-14 (Steps 5 & 6 committed & pushed; Step 7 Telegram scraper written locally, untested, uncommitted)
 
 ---
 
@@ -34,7 +34,7 @@ Automated Bengaluru rental-market intelligence. Weekly pipeline: scrape NoBroker
 - User email (git): `rvs51101@gmail.com`, name: `Rajveer`
 - Timezone: Asia/Calcutta (UTC+5:30)
 
-## Repo layout (as scaffolded)
+## Repo layout (current)
 
 ```
 bengaluru-renter-copilot/
@@ -44,11 +44,17 @@ bengaluru-renter-copilot/
 ├── scrapers/
 │   ├── __init__.py         ✅
 │   ├── db_utils.py         ✅ shared DB helpers
-│   ├── nobroker.py         ✅ Playwright scraper (untested against live site)
-│   └── telegram.py         ⏳ not started (blocked on API creds)
-├── extraction/             ⏳ empty
+│   ├── nobroker.py         ✅ Playwright scraper, 17 listings scraped
+│   └── telegram.py         ⚠️ WRITTEN LOCALLY, UNTESTED, UNCOMMITTED
+├── extraction/
+│   ├── regex_v1.py         ✅ (17 rows in extractions)
+│   ├── gemini_flash.py     ✅ (17 rows in extractions)
+│   └── label.py            ✅ CLI labeler
+├── data/
+│   └── labeled_v1.jsonl    ✅ 15 hand-labeled ground-truth listings
+├── benchmark/
+│   └── run_benchmark.py    ✅ regex 90.2% vs gemini-flash 89.2% macro accuracy
 ├── pricing/                ⏳ empty
-├── benchmark/              ⏳ empty
 ├── dashboards/
 │   ├── streamlit/          ⏳ empty
 │   └── powerbi/            ⏳ empty
@@ -58,9 +64,10 @@ bengaluru-renter-copilot/
 │   └── init_db.py          ✅ idempotent, verifies 8 tables
 ├── notebooks/              ⏳ empty
 ├── tests/                  ⏳ empty
-├── .env                    (local only, gitignored)
+├── .env                    (local only, gitignored — GEMINI_API_KEY + TELEGRAM_API_ID/HASH set)
 ├── .env.example            ✅
 ├── .gitignore              ✅
+├── .telegram_session.session  (local only, gitignored — Telethon login persisted)
 ├── requirements.txt        ✅ (torch installed separately with CUDA index)
 ├── README.md               ✅
 └── PROGRESS.md             ← this file
@@ -88,122 +95,116 @@ bengaluru-renter-copilot/
 - Ask before installing anything outside `requirements.txt`.
 - Be honest on benchmarks — if regex wins on a field, say so.
 
-## Build order (from handoff)
+## Build order — status
 
 1. ✅ Setup & verify env (git, venv, deps, playwright, init_db → 8 tables)
-2. ✅ **NoBroker scraper** — working. Dry-run confirmed card parsing. Real run wrote 17 unique listings to DB under `run_id=1` (30 scraped, 13 SHA256-deduped as cross-locality overlaps).
-3. ✅ **Regex baseline extractor** — done. 17 rows in `extractions` with `extractor='regex-v1'`. Latency 0.4-2.1ms per listing. Catches `tenant_pref=family` and `is_owner=1` reliably (from NoBroker's structured labels); `veg_only`, `negotiable`, `lock_in_months` correctly all None (NoBroker cards don't advertise these — Telegram data would).
-4. ✅ **Gemini Flash extractor** — done. 17 rows in `extractions` with `extractor='gemini-flash'`, model=`gemini-3.5-flash`. Latency 3.8-11.3s per call (avg ~5.7s), total cost **$0.00487** for 17 listings. Interesting finding: on NoBroker card text Gemini's output matches regex-v1 exactly on most fields — expected because the card text is labels-only with no ambiguity. The regex-vs-Gemini gap will only surface on unstructured text (Telegram, or listing detail pages). Worth remembering for Step 7 benchmark write-up.
-
-4. ⏳ Gemini Flash extractor → `extractions` w/ `extractor='gemini-flash'`, track cost/latency
-5. ⏳ Labeling harness → `data/labeled_v1.jsonl`, ~500 examples
-6. ⏳ DistilBERT fine-tune on RTX 3050 → `extractions` w/ `extractor='distilbert-v1'`
-7. ⏳ Benchmark harness → `benchmark_runs`
-8. ⏳ Localities seed data (lat/lon + distances)
-9. ⏳ Feature engineering + XGBoost + time-based CV + locality-stratified eval
-10. ⏳ Prediction script → `predictions`
-11. ⏳ Streamlit app
-12. ⏳ Deploy Streamlit to HF Spaces
-13. ⏳ Power BI 4-page report → Power BI Service
-14. ⏳ GitHub Actions weekly.yml (Sun 02:00 UTC)
+2. ✅ **NoBroker scraper** — 17 unique listings under `run_id=1` (30 scraped, 13 SHA256-deduped)
+3. ✅ **Regex baseline extractor** — 17 rows in `extractions` with `extractor='regex-v1'`. Latency 0.4-2.1ms per listing.
+4. ✅ **Gemini Flash extractor** — 17 rows in `extractions` with `extractor='gemini-flash'`, model=`gemini-3.5-flash`. Latency avg ~5.7s, cost **$0.00487** for 17 listings.
+5. ✅ **Labeling harness** — `extraction/label.py` CLI written; 15 listings hand-labeled to `data/labeled_v1.jsonl`. (Committed as `Step 5: labeling harness + 15 hand-labeled ground-truth listings`.)
+6. ✅ **Benchmark harness** — regex-v1 vs gemini-flash on the 15 labeled listings. **Regex 90.2% macro accuracy, Gemini 89.2%.** Regex slightly edges Gemini on NoBroker card text — expected, since NoBroker cards are labels-only. The gap will invert on unstructured Telegram text. Written to `benchmark_runs`. (Committed as `Step 6: benchmark harness — regex 90.2% vs gemini-flash 89.2% macro accuracy`.)
+7. ⚠️ **Telegram scraper** — code written (`scrapers/telegram.py`, 309 lines), NOT yet tested, NOT yet committed. Telegram API creds unblocked; `.telegram_session.session` exists so login succeeded at some point. **Next action ↓.**
+8. ⏳ DistilBERT fine-tune on RTX 3050 → `extractions` w/ `extractor='distilbert-v1'` (needs more labeled data — Telegram will feed this)
+9. ⏳ Localities seed data (lat/lon + distances)
+10. ⏳ Feature engineering + XGBoost + time-based CV + locality-stratified eval
+11. ⏳ Prediction script → `predictions`
+12. ⏳ Streamlit app
+13. ⏳ Deploy Streamlit to HF Spaces
+14. ⏳ Power BI 4-page report → Power BI Service
+15. ⏳ GitHub Actions weekly.yml (Sun 02:00 UTC)
 
 ## Credentials status
 
 | Cred | Purpose | Status |
 |---|---|---|
-| GitHub | repo | ✅ created, first push done |
-| Telegram `api_id` + `api_hash` | Telethon | ❌ my.telegram.org keeps returning generic `ERROR`. Deferred. Try again later in incognito after 30min cool-off. |
-| Gemini API key | benchmark baseline | ⏳ not yet requested |
+| GitHub | repo | ✅ |
+| Gemini API key | benchmark baseline | ✅ (in .env, tier: free) |
+| Telegram `api_id` + `api_hash` | Telethon | ✅ (in .env, session persisted) |
 | Hugging Face token | Space deploy | ⏳ not yet requested |
 
-**Telegram scraping is deferred** — decided to build the whole pipeline on NoBroker data first, slot Telegram in later. Not on the critical path.
-
-## What's been done, session by session
+## Session log
 
 ### Session 1 (2026-08-12) — Steps 1 & 2
+Repo scaffold, NoBroker scraper. Details preserved in git commit messages.
 
-**Step 1: repo scaffold + env setup — DONE**
-- Received attached `schema.sql` + `README.md` from user
-- Generated repo skeleton in cloud sandbox: `.gitignore`, `.env.example`, `requirements.txt`, `scripts/init_db.py`, folder tree with `.gitkeep`s
-- Sent zip to user (`bengaluru-renter-copilot.zip`)
-- User unzipped to `C:\coding\bengaluru-renter-copilot\`
-- Verified: `git --version` (2.52), `python -m venv .venv`, `Activate.ps1` (needed ExecutionPolicy tweak? no — worked first try)
-- Installed torch CUDA build via `--index-url https://download.pytorch.org/whl/cu121`, then `pip install -r requirements.txt`, then `playwright install chromium`
-- Ran `python scripts/init_db.py` → all 8 expected tables printed ✅
-- Git config: `Rajveer` / `rvs51101@gmail.com`
-- First commit `Step 1: repo scaffold, schema, init_db` (16 files), renamed master→main, pushed to `https://github.com/rajveer-2004/bengaluru-renter-copilot`
-- Attempted Telegram API registration at my.telegram.org — kept getting generic `ERROR` (tried multiple combos of App title, Short name, URL, Description). Deferred.
+### Session 2 (2026-08-13) — Steps 3 & 4
+Regex baseline extractor + Gemini Flash extractor. See commit messages. Gemini model debugging saga documented below.
 
-**Step 2: NoBroker scraper — DONE**
+### Session 3 (2026-08-13/14) — Steps 5, 6, Telegram scraper started
+- Wrote `extraction/label.py` CLI. Hand-labeled 15 of the 17 NoBroker listings (2 skipped for ambiguity).
+- Wrote `benchmark/run_benchmark.py`. Computes per-field accuracy, macro accuracy, cost/1k, and p50/p95 latency for each extractor against `labeled_v1.jsonl`. Wrote first row to `benchmark_runs` for regex-v1 (90.2%) and gemini-flash (89.2%).
+- Committed & pushed Steps 5 and 6.
+- Unblocked Telegram creds (my.telegram.org worked eventually). Wrote `scrapers/telegram.py` — Telethon, two-phase `--list-groups`/`--groups` workflow, `looks_like_listing` filter (BHK/rent markers + ≥60 chars), writes to same `raw_listings`/`listings`/`listing_observations` schema under `source='telegram:<group_name>'`.
+- Chat session was accidentally deleted before Telegram scraper could be tested or committed.
 
-Test results:
-- Dry-run on HSR Layout: `article` selector fallback found cards, parsed BHK/area/rent/URLs correctly
-- Real run (`--max-per-locality 10 --localities "HSR Layout" "Koramangala" "Whitefield"`): 30 scraped, 17 written (13 SHA256-deduped)
-- All four core tables populated under `run_id=1`
-- NoBroker did NOT block — no anti-bot triggered at this volume
-
-Known parsing gaps (fix later, not blockers):
-- `locality` field currently stores the search query, not the actual property locality (which lives in the URL/text). Fix in Step 3 extraction.
-- Deposit not parsed yet (needs a dedicated regex — it's on a separate line under "Deposit" label).
-
-**Original code details:**
-- Wrote `scrapers/db_utils.py`:
-  - `utcnow_iso()`, `git_sha()`, `normalize_text()`, `content_hash()` (SHA256)
-  - `normalize_locality()`, `rent_bucket()`, `area_bucket()`, `dedup_key()`
-  - `get_conn()` context manager (with `PRAGMA foreign_keys = ON`, `row_factory = sqlite3.Row`)
-  - `start_scrape_run()` / `finish_scrape_run()`
-  - `insert_raw_listing()` — returns None on duplicate (UNIQUE(source, content_hash))
-  - `upsert_listing()` — returns `(listing_id, is_new)`, keyed by `dedup_key`
-  - `log_observation()`
-- Wrote `scrapers/nobroker.py`:
-  - Playwright headless Chromium, desktop user-agent, 1440×900 viewport
-  - `DEFAULT_LOCALITIES` = HSR, Koramangala, Indiranagar, Whitefield, Bellandur, Marathahalli, Ecity, Jayanagar, BTM, Sarjapur
-  - `SEARCH_URL_TMPL` uses NoBroker Bangalore rent search with `radius=2.0`
-  - Scrolls 4× to trigger lazy-loading, then tries 4 candidate card selectors: `div[data-testid='property-card']`, `div.card.card-padding`, `article`, `div[itemtype*='Product']`
-  - Per-card: captures `inner_text()`, tries to extract BHK / area sqft / rent (parses ₹/Rs, K, L suffixes) / furnishing via regex
-  - Politeness: `time.sleep(random.uniform(2.0, 3.5))` between locality pages
-  - Writes to raw_listings + listings + listing_observations under a single `scrape_run`
-  - CLI flags: `--dry-run`, `--headed`, `--max-per-locality N`, `--localities ...`
-- Sent zip to user (`bengaluru-renter-copilot-step2.zip`)
-- ⏳ **AWAITING**: user to run `python -m scrapers.nobroker --dry-run --max-per-locality 5 --localities "HSR Layout"` and paste output
+### Session 4 (2026-08-14) — Context recovery
+- Reconstructed state from git log + working tree + this file.
+- Reviewed `scrapers/telegram.py` end-to-end. Verified signatures against `db_utils.py` — all clean.
 
 ## Known risks / open questions
 
-1. **NoBroker anti-bot** — they actively fight scrapers. Selectors are best guesses; first run may find 0 cards. Fallback plan: user runs `--headed` mode, screenshots the browser, we iterate on selectors from the live HTML.
-2. **Telegram deferred** — need to unblock cred registration or move without it.
-3. **Deposit priors** — schema notes explicit reminder: deposit is NOT universally 10 months in BLR (range 2–3 for corporate stock, up to 10 for traditional). Deposit-to-rent ratio is a feature, not a constant. Keep this in mind when we get to feature engineering (Step 9).
-4. **Deal threshold** — 15% is fine only if MAPE < ~10%. If MAPE ~12%, switch to quantile model + define deal as `actual < predicted_p10`.
+1. **NoBroker anti-bot** — currently fine, but selectors may drift.
+2. **Deposit priors** — not universally 10× in BLR (range 2–3× for corporate stock). Deposit-to-rent ratio is a *feature*, not a constant. Bookmark for Step 10.
+3. **Deal threshold** — 15% is fine only if MAPE < ~10%. If MAPE ~12%, switch to quantile model + define deal as `actual < predicted_p10`.
+4. **Telegram scraper — untested.** First real run may reveal: (a) Windows console emoji encoding issues in group names, (b) rate limiting from Telethon's FloodWait, (c) filter false-positives from casual "family" / "owner" mentions.
+
+## Uncommitted local changes (as of 2026-08-14)
+
+| File | Change | Notes |
+|---|---|---|
+| `scrapers/telegram.py` | **new file, 309 lines** | Real new work. Untested. |
+| `extraction/gemini_flash.py` | whole-file diff | Almost certainly a CRLF↔LF line-ending flip, not real edits. Run `git diff --stat` to confirm; if so, revert or normalize before commit. |
+| `data/labeled_v1.jsonl` | 17 lines modified | Likely also line-ending. Same verification. |
 
 ## Next action
 
-**Step 5: Labeling harness (blocking Step 6-7).**
+**Step 7a: Sanity-test the Telegram scraper.**
 
-To fine-tune DistilBERT and to benchmark all three extractors we need ground-truth labels for ~30-100 listings. Build a small CLI (`extraction/label.py`) that:
-1. Pulls unlabeled listings from `raw_listings`
-2. Shows the raw text
-3. Prompts for each extractable field (tenant_pref, veg_only, is_owner, negotiable, lock_in_months, amenities as comma-separated tags)
-4. Writes to `data/labeled_v1.jsonl`
+```powershell
+cd C:\coding\bengaluru-renter-copilot
+.venv\Scripts\Activate.ps1
 
-For the small NoBroker dataset (17 listings) we can hand-label all of them fast. Once we have Telegram data too, we scale up to ~500.
+# 1. Confirm telethon is installed
+pip show telethon
 
-**Then Steps 6-14 flow:** DistilBERT fine-tune → benchmark harness → localities seed → XGBoost pricing → Streamlit → HF deploy → Power BI → GitHub Actions cron.
+# 2. List groups (uses existing session, no re-login needed)
+python -m scrapers.telegram --list-groups
+```
 
-**Model debugging notes (Step 4 saga):**
+Expected: prints every group/channel Rajveer is in with `id=... 'title'`. If session is stale, Telethon will re-prompt for phone + SMS code.
+
+**Step 7b: Small real scrape once groups are chosen.**
+
+```powershell
+# Pick 1-2 groups from the list, start small
+python -m scrapers.telegram --group-ids <id1> --limit-per-group 30 --min-days 7
+```
+
+Then verify writes:
+```python
+python -c "import sqlite3; c=sqlite3.connect('db/copilot.db'); print(c.execute(\"SELECT run_id, source, status, n_raw, n_new FROM scrape_runs ORDER BY run_id DESC LIMIT 3\").fetchall())"
+```
+
+**Step 7c: Commit.** Once tested, add `scrapers/telegram.py`, verify `.telegram_session.session` is gitignored (it is), commit + push as `Step 7: Telegram scraper (Telethon)`.
+
+### Small polish items to consider before committing telegram.py
+
+- L43: `Dialog` imported but unused — safe to remove.
+- L273: `_parse_rent(m["text"])` called twice per message in the write loop (once for `upsert_listing`, once for `log_observation`). Cheap, but assign it to a local for clarity.
+- L64: filter keywords `preferred|bachelor|family|owner|broker` are broad. If Step 7b shows a lot of noise, tighten to require BHK OR ₹/rs OR sqft to hit.
+- No FloodWait handling. Telethon usually handles it internally but worth wrapping the `iter_messages` loop in try/except for a friendlier error message.
+
+None of these block testing.
+
+## Model debugging notes (Step 4 saga)
 - `gemini-1.5-flash` → 404 (retired on v1beta for fresh keys, 2025)
 - `gemini-2.5-flash` → 404 "no longer available to new users" (mid-2025 restrictions)
 - `gemini-3.5-flash` → JSON parse error initially (reasoning tokens ate the 400-token output budget)
 - `gemini-3.5-flash` + `max_output_tokens=2048` → **working**. Kept.
 
-**Available Gemini models on user's key** (from `list_models()` diagnostic):
-`gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.5-flash-lite`, `gemini-3-flash-preview`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.6-flash`, `gemini-3.1-flash-lite`, plus various preview/image/tts variants. If 3.5-flash ever deprecates, next fallback is `gemini-3.5-flash-lite` (cheaper) or `gemini-3.6-flash`.
+**Available Gemini models on user's key**: `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.5-flash-lite`, `gemini-3-flash-preview`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.6-flash`, `gemini-3.1-flash-lite`. Fallback ladder if 3.5-flash deprecates: `3.5-flash-lite` (cheaper) then `3.6-flash`.
 
-**Cost note:** stored `cost_usd` in extractions is the *hypothetical paid-tier cost* from token counts × pricing constants ($0.30/$2.50 per 1M in/out). Actual out-of-pocket = **$0** while under free tier (15 RPM, 1M tokens/day). Even at 10k listings/week paid-tier cost would be ~$3/mo.
-
-**Step 3 session notes:**
-- User first tried extracting via File Explorer's Extract wizard; hit the "Replace or Skip" dialog. Confirmed .gitkeep files are 0-byte identical, safe to replace. Also gave the `Expand-Archive -Force` PowerShell fallback for future zips.
-- Dry-preview via `--show --limit 5` confirmed extraction shape; then real run wrote 17 rows.
-- Verified via `SELECT COUNT(1) FROM extractions` → 17.
-- Committed as `Step 3: regex baseline extractor (17 listings, regex-v1)`.
+**Cost note:** `cost_usd` in extractions is the *hypothetical paid-tier cost* from token counts × pricing constants ($0.30/$2.50 per 1M in/out). Actual out-of-pocket = **$0** while under free tier (15 RPM, 1M tokens/day). Even at 10k listings/week paid-tier cost would be ~$3/mo.
 
 ## How I keep this file current
 
