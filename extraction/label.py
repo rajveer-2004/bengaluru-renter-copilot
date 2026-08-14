@@ -42,10 +42,16 @@ AMENITY_OPTIONS = {"lift","parking","gym","pool","security","power_backup",
 # Sentinel for "user pressed just Enter, use default"
 _DEFAULT = object()
 
+# Module-level flag flipped by _prompt / _parse_amenities when the user types
+# ANYTHING other than a bare Enter. label_one() reads it to decide whether the
+# label should be tagged 'human' or 'silver-gemini'. Reset per listing.
+_HUMAN_INPUT_SEEN = False
+
 
 def _prompt(label: str, default: Any, allowed: Optional[set[str]] = None,
             parse: str = "str") -> Any:
     """Prompt for one field. Returns parsed value, or None."""
+    global _HUMAN_INPUT_SEEN
     hint = f" [{default}]" if default is not None else " [none]"
     if allowed:
         opts = "/".join(sorted(allowed))
@@ -56,6 +62,7 @@ def _prompt(label: str, default: Any, allowed: Optional[set[str]] = None,
     raw = input(prompt).strip()
     if raw == "":
         return default
+    _HUMAN_INPUT_SEEN = True
     if raw.lower() in {"none", "null", "-"}:
         return None
     if parse == "bool":
@@ -78,11 +85,13 @@ def _prompt(label: str, default: Any, allowed: Optional[set[str]] = None,
 
 
 def _parse_amenities(default_list: list[str]) -> list[str]:
+    global _HUMAN_INPUT_SEEN
     default_str = ", ".join(default_list) if default_list else ""
     hint = f" [{default_str}]" if default_str else " [empty]"
     raw = input(f"  amenities (comma-separated, allowed: {sorted(AMENITY_OPTIONS)}){hint}: ").strip()
     if raw == "":
         return default_list
+    _HUMAN_INPUT_SEEN = True
     if raw.lower() in {"none", "null", "-", "empty"}:
         return []
     tags = [t.strip().lower() for t in raw.split(",") if t.strip()]
@@ -153,6 +162,8 @@ def _default_from_hints(field: str, hints: dict[str, dict]) -> Any:
 
 
 def label_one(conn: sqlite3.Connection, row: sqlite3.Row) -> Optional[dict[str, Any]]:
+    global _HUMAN_INPUT_SEEN
+    _HUMAN_INPUT_SEEN = False  # reset for this listing
     hints = _fetch_hints(conn, row["listing_id"])
     print("\n" + "=" * 70)
     header = f"listing_id={row['listing_id']}  "
@@ -202,6 +213,12 @@ def label_one(conn: sqlite3.Connection, row: sqlite3.Row) -> Optional[dict[str, 
         default_amens = hints["regex-v1"]["amenities"] or []
     amenities = _parse_amenities(default_amens)
 
+    # Provenance: 'human' if the user typed at least one non-default answer
+    # for this listing; 'silver-gemini' if they hit Enter through everything
+    # (label == whatever the extractor hint prefilled). Downstream benchmark
+    # can split by this to avoid grading Gemini against its own guesses.
+    label_source = "human" if _HUMAN_INPUT_SEEN else "silver-gemini"
+
     return {
         "listing_id": row["listing_id"],
         "raw_text": row["raw_text"],
@@ -211,6 +228,7 @@ def label_one(conn: sqlite3.Connection, row: sqlite3.Row) -> Optional[dict[str, 
         "negotiable": negotiable,
         "lock_in_months": lock_in,
         "amenities": amenities,
+        "label_source": label_source,
     }
 
 
