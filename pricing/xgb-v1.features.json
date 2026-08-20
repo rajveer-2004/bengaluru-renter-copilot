@@ -1,0 +1,68 @@
+{
+  "feature_cols": [
+    "bhk",
+    "area_sqft",
+    "log_area_sqft",
+    "lat",
+    "lon",
+    "dist_nearest_metro_km",
+    "dist_orr_km",
+    "dist_manyata_km",
+    "dist_ecity_km",
+    "dist_whitefield_km",
+    "dist_orr_bellandur_km",
+    "deposit_to_rent_ratio",
+    "floor_num",
+    "total_floors",
+    "floor_ratio",
+    "locality_median_rent_per_sqft",
+    "locality_bhk_median_rent_per_sqft",
+    "furn_unfurnished",
+    "furn_semi",
+    "furn_full",
+    "src_nobroker",
+    "src_telegram",
+    "ptype_apartment",
+    "ptype_independent_house",
+    "ptype_villa",
+    "ptype_pg",
+    "ptype_studio"
+  ],
+  "numeric_features": [
+    "bhk",
+    "area_sqft",
+    "log_area_sqft",
+    "lat",
+    "lon",
+    "dist_nearest_metro_km",
+    "dist_orr_km",
+    "dist_manyata_km",
+    "dist_ecity_km",
+    "dist_whitefield_km",
+    "dist_orr_bellandur_km",
+    "deposit_to_rent_ratio",
+    "floor_num",
+    "total_floors",
+    "floor_ratio",
+    "locality_median_rent_per_sqft",
+    "locality_bhk_median_rent_per_sqft"
+  ],
+  "furnishing_cats": [
+    "unfurnished",
+    "semi",
+    "full"
+  ],
+  "source_cats": [
+    "nobroker",
+    "telegram"
+  ],
+  "target": "log_rent_monthly",
+  "n_total": 1167,
+  "cv": "5-fold KFold, shuffle=True",
+  "metrics": {
+    "mae_inr": 8037.855202793128,
+    "mape": 0.23081811406477845,
+    "mape_std": 0.013065265099198099,
+    "r2": 0.6814905473628325
+  }
+}

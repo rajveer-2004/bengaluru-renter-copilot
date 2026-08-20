@@ -21,6 +21,7 @@ so we can re-parse from stored raw data without re-scraping.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import random
 import re
@@ -58,11 +59,78 @@ DEFAULT_LOCALITIES = [
     "Sarjapur Road",
 ]
 
-SEARCH_URL_TMPL = (
-    "https://www.nobroker.in/property/rent/bangalore/{q}?"
-    "searchParam=W3sibGF0IjoxMi45NzE1OTg3LCJsb24iOjc3LjU5NDU2Miwic2hvd01hcCI6ZmFsc2V9XQ==&"
-    "radius=2.0&city=bangalore"
-)
+# Per-locality lat/lon. Without this, every search resolves to the same
+# center point (12.9715987, 77.594562 = downtown MG Road) and dedup annihilates
+# results across localities. Add new localities as we expand coverage.
+LOCALITY_COORDS: dict[str, tuple[float, float]] = {
+    # Core 14 (well-tested)
+    "HSR Layout":        (12.9081, 77.6476),
+    "Koramangala":       (12.9352, 77.6245),
+    "Indiranagar":       (12.9784, 77.6408),
+    "Whitefield":        (12.9698, 77.7500),
+    "Bellandur":         (12.9250, 77.6820),
+    "Marathahalli":      (12.9591, 77.6974),
+    "Electronic City":   (12.8452, 77.6602),
+    "Jayanagar":         (12.9250, 77.5938),
+    "BTM Layout":        (12.9166, 77.6101),
+    "Sarjapur":          (12.9010, 77.6874),
+    "Sarjapur Road":     (12.9010, 77.6874),
+    "JP Nagar":          (12.9081, 77.5831),
+    "Bommanahalli":      (12.8973, 77.6212),
+    "Hebbal":            (13.0358, 77.5970),
+    "Yelahanka":         (13.1006, 77.5963),
+    # Central & west
+    "Rajajinagar":       (12.9915, 77.5522),
+    "Malleshwaram":      (13.0035, 77.5647),
+    "Basavanagudi":      (12.9422, 77.5738),
+    "Banashankari":      (12.9256, 77.5468),
+    "Vijayanagar":       (12.9719, 77.5307),
+    "Rajarajeshwari Nagar": (12.9210, 77.5205),
+    # Northeast / airport corridor
+    "Kalyan Nagar":      (13.0219, 77.6437),
+    "Kammanahalli":      (13.0126, 77.6395),
+    "Frazer Town":       (12.9987, 77.6118),
+    "Cooke Town":        (13.0068, 77.6209),
+    "RT Nagar":          (13.0246, 77.5940),
+    "Nagavara":          (13.0430, 77.6220),
+    "Sanjay Nagar":      (13.0362, 77.5787),
+    # East + IT corridors
+    "Ulsoor":            (12.9799, 77.6248),
+    "Domlur":            (12.9611, 77.6386),
+    "CV Raman Nagar":    (13.0117, 77.6600),
+    "Kaggadasapura":     (12.9902, 77.6672),
+    "KR Puram":          (13.0064, 77.6957),
+    "Kadugodi":          (12.9878, 77.7566),
+    "Hoodi":             (12.9910, 77.7134),
+    "Doddanekundi":      (12.9781, 77.6982),
+    "Ramamurthy Nagar":  (13.0154, 77.6787),
+    # South
+    "Silk Board":        (12.9179, 77.6224),
+    "Bommasandra":       (12.8071, 77.6987),
+    "Kanakapura Road":   (12.8823, 77.5541),
+    "Wilson Garden":     (12.9508, 77.5934),
+    # Northwest
+    "Yeshwanthpur":      (13.0290, 77.5401),
+    "Kengeri":           (12.9081, 77.4820),
+    "Nagarabhavi":       (12.9564, 77.4995),
+}
+
+# Fallback center (downtown Bangalore) if a locality isn't in the map above.
+_DEFAULT_COORDS = (12.9715987, 77.594562)
+
+
+def _build_search_url(locality: str, radius_km: float = 2.0) -> str:
+    """NoBroker's searchParam is a base64-encoded JSON payload with lat/lon.
+    Old code hardcoded the downtown coords for every locality — killed all
+    the geographic variety via dedup. Now we encode per-locality."""
+    lat, lon = LOCALITY_COORDS.get(locality, _DEFAULT_COORDS)
+    payload = json.dumps([{"lat": lat, "lon": lon, "showMap": False}],
+                         separators=(",", ":"))
+    search_param = base64.b64encode(payload.encode("utf-8")).decode("ascii")
+    return (
+        f"https://www.nobroker.in/property/rent/bangalore/{quote(locality)}?"
+        f"searchParam={search_param}&radius={radius_km}&city=bangalore"
+    )
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -159,7 +227,7 @@ def _polite_sleep(min_s: float = 2.0, max_s: float = 3.5) -> None:
 
 
 def _scrape_locality(page: Page, locality: str, max_cards: int) -> list[Listing]:
-    url = SEARCH_URL_TMPL.format(q=quote(locality))
+    url = _build_search_url(locality)
     print(f"  -> {url}", flush=True)
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=30_000)
@@ -167,13 +235,10 @@ def _scrape_locality(page: Page, locality: str, max_cards: int) -> list[Listing]
         print(f"     timeout loading {locality}", flush=True)
         return []
 
-    # NoBroker lazy-loads. Scroll a few times to trigger card rendering.
-    for _ in range(4):
-        page.mouse.wheel(0, 4000)
-        time.sleep(1.2)
-
-    # Card selectors change across NoBroker's redesigns. Try a set of known
-    # container selectors and take whichever yields results.
+    # NoBroker uses infinite scroll (no ?page= URLs). Scroll aggressively
+    # until we hit max_cards OR the card count stops growing for a few
+    # consecutive scrolls (list exhausted). Replaces the old fixed-4-scrolls
+    # loop that capped us at ~30-40 cards per locality.
     candidates = [
         "div[data-testid='property-card']",
         "div.card.card-padding",
@@ -181,13 +246,35 @@ def _scrape_locality(page: Page, locality: str, max_cards: int) -> list[Listing]
         "div[itemtype*='Product']",
     ]
 
-    cards = []
-    for sel in candidates:
-        found = page.query_selector_all(sel)
-        if found:
-            cards = found
-            print(f"     selector '{sel}' -> {len(cards)} cards", flush=True)
-            break
+    def _current_cards() -> tuple[list, str]:
+        for sel in candidates:
+            found = page.query_selector_all(sel)
+            if found:
+                return found, sel
+        return [], ""
+
+    cards, sel = _current_cards()
+    stall = 0
+    scrolls = 0
+    max_scrolls = 40  # hard cap so a broken page can't loop forever
+    while len(cards) < max_cards and stall < 4 and scrolls < max_scrolls:
+        prev = len(cards)
+        page.mouse.wheel(0, 6000)
+        time.sleep(1.0)
+        # Every few scrolls, nudge to the very bottom to trigger lazy-load
+        if scrolls % 3 == 2:
+            try:
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                time.sleep(0.8)
+            except Exception:  # noqa: BLE001
+                pass
+        cards, sel = _current_cards()
+        scrolls += 1
+        stall = stall + 1 if len(cards) == prev else 0
+
+    if cards:
+        print(f"     selector '{sel}' -> {len(cards)} cards "
+              f"({scrolls} scrolls, stall={stall})", flush=True)
 
     if not cards:
         print("     no cards found (selectors may have changed)", flush=True)

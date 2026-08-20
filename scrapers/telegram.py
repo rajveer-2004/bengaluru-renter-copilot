@@ -72,6 +72,24 @@ _SALE_MARKER = re.compile(
     r"\bexpected\s+price\b"
 )
 
+# Room-share / flatmate-wanted markers. Telegram groups are dominated by
+# these; the rent quoted is per-person for a room, not the whole flat, so
+# they can't feed the whole-flat pricing model. We tag them separately.
+_ROOM_SHARE_MARKER = re.compile(
+    r"(?i)\b(?:flatmate|flat\s*mate|roommate|room\s*mate|"
+    r"female\s+flatmate|male\s+flatmate|per\s+person|per\s+head|"
+    r"room\s+available|share\s+the\s+flat|share\s+the\s+room|"
+    r"looking\s+for\s+(?:a\s+)?(?:female|male|girl|boy)\s+(?:flatmate|roommate)|"
+    r"paying\s+guest|\bpg\b)"
+)
+
+
+def is_room_share(text: str) -> bool:
+    """Flatmate-wanted / room-share / PG post — rent is per-person, not
+    for the whole flat. Kept in raw_listings for completeness but
+    excluded from the pricing model."""
+    return bool(_ROOM_SHARE_MARKER.search(text or ""))
+
 
 def looks_like_listing(text: str) -> bool:
     if not text or len(text) < 60:
@@ -263,19 +281,32 @@ async def _run(list_groups: bool, group_names: list[str], group_ids: list[int],
     with get_conn() as conn:
         run_id = start_scrape_run(conn, "telegram")
         try:
+            n_share = 0
             for group_name, m in all_msgs:
-                source = f"telegram:{group_name}"
+                text = m["text"]
+                # Room-share posts get a distinct source prefix so downstream
+                # pricing can exclude them, and their per-person "rent" is
+                # nulled out (it's not a whole-flat rent — meaningful comparisons
+                # would need a per-person target the model doesn't have).
+                share = is_room_share(text)
+                if share:
+                    n_share += 1
+                source = (f"telegram_share:{group_name}" if share
+                          else f"telegram:{group_name}")
+
                 raw_id = insert_raw_listing(
                     conn, run_id=run_id, source=source,
                     source_url=None, source_msg_id=m["msg_id"],
-                    raw_text=m["text"], raw_json=None,
+                    raw_text=text, raw_json=None,
                 )
                 if raw_id is None:
                     continue
                 n_raw += 1
 
-                text = m["text"]
-                rent = _parse_rent(text)  # parse once, reuse for both writes
+                # Both share and whole-flat: parse rent as stated in the post.
+                # For share posts this is per-person; downstream pricing.predict
+                # multiplies by round(bhk) to compare against whole-flat model.
+                rent = _parse_rent(text)
                 listing_id, is_new = upsert_listing(
                     conn, source=source,
                     locality=guess_locality(text),
@@ -299,6 +330,9 @@ async def _run(list_groups: bool, group_names: list[str], group_ids: list[int],
             finish_scrape_run(conn, run_id, status="failed",
                               n_raw=n_raw, n_new=n_new, error=str(e))
             raise
+
+    print(f"Room-share posts tagged separately: {n_share} of {len(all_msgs)} "
+          f"({n_share/len(all_msgs)*100:.0f}%)", flush=True)
 
     print(f"Wrote {n_raw} new raw rows, {n_new} new listings under run_id={run_id}",
           flush=True)
