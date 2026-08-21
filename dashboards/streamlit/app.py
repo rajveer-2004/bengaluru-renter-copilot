@@ -106,6 +106,10 @@ def load_deals(db_path: str) -> pd.DataFrame:
               AND l.area_sqft   IS NOT NULL
               AND l.bhk         IS NOT NULL
               AND p.predicted_rent IS NOT NULL
+              -- Drop cards NoBroker returned outside the queried locality
+              -- (see scripts/enrich_listings.py::parse_locality). Without
+              -- a real locality we can't compute a trustworthy prediction.
+              AND l.locality != 'outside_coverage'
             """,
             conn,
         )
