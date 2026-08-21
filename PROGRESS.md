@@ -2,7 +2,7 @@
 
 Living document. Updated after every meaningful step so a new chat session can pick up with full context. **Read this top-to-bottom before continuing work.**
 
-Last updated: 2026-08-14 (Steps 5 & 6 committed & pushed; Step 7 Telegram scraper written locally, untested, uncommitted)
+Last updated: 2026-08-14 late night (Steps 9-13 done: XGBoost pricing pipeline (MAPE 22.5%, R² 0.71 on 1166 rows, 40 localities), Streamlit dashboard running locally, Power BI CSVs + build guide shipped. Left: HF Spaces deploy, GH Actions cron.)
 
 ---
 
@@ -103,8 +103,38 @@ bengaluru-renter-copilot/
 4. ✅ **Gemini Flash extractor** — 17 rows in `extractions` with `extractor='gemini-flash'`, model=`gemini-3.5-flash`. Latency avg ~5.7s, cost **$0.00487** for 17 listings.
 5. ✅ **Labeling harness** — `extraction/label.py` CLI written; 15 listings hand-labeled to `data/labeled_v1.jsonl`. (Committed as `Step 5: labeling harness + 15 hand-labeled ground-truth listings`.)
 6. ✅ **Benchmark harness** — regex-v1 vs gemini-flash on the 15 labeled listings. **Regex 90.2% macro accuracy, Gemini 89.2%.** Regex slightly edges Gemini on NoBroker card text — expected, since NoBroker cards are labels-only. The gap will invert on unstructured Telegram text. Written to `benchmark_runs`. (Committed as `Step 6: benchmark harness — regex 90.2% vs gemini-flash 89.2% macro accuracy`.)
-7. ⚠️ **Telegram scraper** — code written (`scrapers/telegram.py`, 309 lines), NOT yet tested, NOT yet committed. Telegram API creds unblocked; `.telegram_session.session` exists so login succeeded at some point. **Next action ↓.**
-8. ⏳ DistilBERT fine-tune on RTX 3050 → `extractions` w/ `extractor='distilbert-v1'` (needs more labeled data — Telegram will feed this)
+7. ✅ **Telegram scraper** — Telethon, two-phase `--list-groups`/`--groups` workflow. Tested and committed. run_id=2 scraped 76 raw / 35 new listings from "Bangalore Flatmates & Rent (no spam)" and "Flat And Flatmates Bangalore". Filter excludes sale posts, rent regex catches "RENT: 27k" style, KNOWN_LOCALITIES extended with Kadugodi/Harlur/Hoodi/etc from real data. Also shipped `scripts/inspect_telegram.py` for quick DB peek.
+8. ✅ **Silver-labeling + honest benchmark** — Gemini Flash re-run on 20 of 36 Telegram listings (Google's free tier is now **20 req/day**, not 15 RPM — 15 stragglers deferred to tomorrow's quota reset). Labeler accepts Gemini's guesses as prefilled defaults; each label now carries `label_source` ('human' vs 'silver-gemini') to prevent grading Gemini against its own answers. Benchmark now prints two tables: HUMAN-ONLY (regex 90.2% vs Gemini 89.2% on 17 NoBroker cards — reproduces Step 6, this is the number to publish) and FULL-WITH-SILVER (coverage view, Gemini score inflated, flagged). Two `benchmark_runs` rows: `eval_set='holdout-v1-human'` and `'holdout-v1-full'`.
+9. ✅ **Localities seed** — 32 Bengaluru localities in `localities` table with lat/lon + haversine distances to metro/ORR/Manyata/E-City/Whitefield/Bellandur. See `scripts/seed_localities.py`.
+10. ✅ **XGBoost pricing model v1** — `pricing/train_xgb.py`, 5-fold CV, 1166 trainable listings from 40 localities.
+    - CV **MAPE 22.5%**, R² 0.71, MAE ₹7,740, per-fold std 1.1%
+    - Design choices: MAE loss (robust to outliers), rent-per-sqft training filter ₹12-150, model params scale with n_train, locality + (locality × BHK) leave-one-out median rent-per-sqft priors
+    - See `pricing/xgb-v1.pkl` + `.features.json`
+11. ✅ **Deal-detection predict script** — `pricing/predict.py`. Plausibility filter (rent-per-sqft ≥ ₹10) excludes source-data anomalies from deal view. Two modes: whole-flat deals (main) AND flatmate-share deals (predicted_whole ÷ BHK vs actual per-person).
+12. ✅ **Enrichment re-parser** — `scripts/enrich_listings.py`. Re-parses raw NoBroker card text for property_type (98% coverage), deposit (100%), floor_num/total_floors (62%). Age of Building not present in card text → skipped.
+13. ✅ **Streamlit dashboard** — `dashboards/streamlit/app.py`. Filters, KPIs, ranked deals table with NoBroker deep-links, model transparency card. Runs locally at http://localhost:8501.
+14. ✅ **Power BI export + build guide** — `dashboards/powerbi/export.py` dumps 4 CSVs (listings, deals, localities, model_metrics). `BUILD_GUIDE.md` walks through 4-page report assembly with DAX measures.
+
+**Left for future sessions:**
+15. ⏳ **HF Spaces deploy** — Streamlit dashboard to a public URL. Instructions in `dashboards/streamlit/DEPLOY_HF.md`.
+16. ⏳ **GitHub Actions weekly cron** — `.github/workflows/weekly.yml`. NoBroker-only (Telegram needs interactive auth, skipped in CI). Runs Sundays 02:00 UTC.
+17. ⏳ **DistilBERT fine-tune** (deferred — MVP is shipping without it; Gemini + regex ensemble is good enough for extraction)
+
+## Model story (as of 2026-08-14)
+
+- Started with 358 listings across 14 tech corridors, MAPE 33% (overfit and biased)
+- Fixed NoBroker `searchParam` bug — hardcoded downtown coords caused every locality search to return same MG Road flats → 39 unique out of 513 scraped. After fix + more localities: 1566 total listings, 40+ localities.
+- Fixed model overfitting by switching to **MAE loss** and adding rent-per-sqft training filter → MAPE 22.5%, R² 0.71
+- Added enrichment for property_type/deposit/floor/age (age had 0% card coverage, dropped from features)
+- Manual verification: top-1 Domlur ₹15k 2BHK 1200sqft matches NoBroker's live page exactly. Model correctly flagged 44% below prediction.
+
+## Honest limitations (bake into portfolio writeup)
+
+- **Locality-level features only** — no exact building name, no floor for 38% of listings
+- **Card-level scraping** — NoBroker detail pages have more info but we don't click into them yet
+- **NoBroker card errors pass through unchanged** — plausibility filter catches the worst (₹/sqft < 10)
+- **Rank-order deal detection compensates for point-estimate noise** — 22% MAPE means predictions wobble ±22% but ranking is stable
+- **Locality label = search query, not real address** — NoBroker's radius search occasionally returns distant listings for a query (found via #855 Kalyan Nagar listing → Anekal URL)
 9. ⏳ Localities seed data (lat/lon + distances)
 10. ⏳ Feature engineering + XGBoost + time-based CV + locality-stratified eval
 11. ⏳ Prediction script → `predictions`
@@ -156,9 +186,34 @@ Regex baseline extractor + Gemini Flash extractor. See commit messages. Gemini m
 | `extraction/gemini_flash.py` | whole-file diff | Almost certainly a CRLF↔LF line-ending flip, not real edits. Run `git diff --stat` to confirm; if so, revert or normalize before commit. |
 | `data/labeled_v1.jsonl` | 17 lines modified | Likely also line-ending. Same verification. |
 
-## Next action
+## Next action (tomorrow morning, after Gemini quota resets ~24h from 2026-08-14 evening)
 
-**Step 7a: Sanity-test the Telegram scraper.**
+**Continue Step 8: finish the remaining 15 Telegram listings with proper human labels.**
+
+```powershell
+cd C:\coding\bengaluru-renter-copilot
+.venv\Scripts\Activate.ps1
+
+# 1. Gemini extract the 15 stragglers (auto-skips already-done listings)
+python -m extraction.gemini_flash
+
+# 2. Label them — this time READ each listing and correct Gemini where wrong.
+#    Any field you type into (instead of Enter-through) will be tagged
+#    label_source='human'. Aim to grow human labels from 17 -> ~32.
+python -m extraction.label
+
+# 3. Re-run benchmark, check that HUMAN-ONLY macro accuracy still looks sane
+python -m benchmark.run_benchmark
+
+# 4. Commit
+git add data/labeled_v1.jsonl
+git commit -m "Step 8 continued: label remaining 15 Telegram listings (n_human ~32)"
+git push
+```
+
+**After that, Step 9: DistilBERT fine-tune.** With ~32 human labels the fine-tune is still small but viable for a portfolio demo. Real production would want 200+, but that's a Telegram-scraping-scale problem, not a modelling problem.
+
+## Older next-action archive: Step 7a sanity-test (superseded)
 
 ```powershell
 cd C:\coding\bengaluru-renter-copilot

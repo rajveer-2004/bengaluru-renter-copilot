@@ -1,0 +1,72 @@
+name: weekly-pipeline
+
+on:
+  schedule:
+    - cron: "0 2 * * 0"
+  workflow_dispatch: {}
+
+jobs:
+  scrape-and-score:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Playwright + Chromium
+        run: playwright install --with-deps chromium
+
+      - name: Initialize DB
+        run: python scripts/init_db.py
+
+      - name: Restore last-week DB snapshot
+        run: |
+          git fetch origin data-snapshot || true
+          git show origin/data-snapshot:db/copilot.db > db/copilot.db 2>/dev/null || echo "fresh init"
+
+      - name: Scrape NoBroker (14 core localities)
+        run: |
+          python -m scrapers.nobroker --max-per-locality 40 --localities "HSR Layout" "Koramangala" "Indiranagar" "Whitefield" "Bellandur" "Marathahalli" "Electronic City" "Jayanagar" "BTM Layout" "Sarjapur" "JP Nagar" "Bommanahalli" "Hebbal" "Yelahanka"
+
+      - name: Regex baseline extractor
+        run: python -m extraction.regex_baseline
+
+      - name: Gemini Flash extractor (best-effort)
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python -m extraction.gemini_flash || true
+
+      - name: Enrich listings
+        run: python -m scripts.enrich_listings
+
+      - name: Seed localities
+        run: python -m scripts.seed_localities
+
+      - name: Retrain XGBoost
+        run: python -m pricing.train_xgb
+
+      - name: Predict + flag deals
+        run: python -m pricing.predict --top 15
+
+      - name: Export dashboard CSVs
+        run: python -m dashboards.powerbi.export
+
+      - name: Push snapshot to data-snapshot branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -B data-snapshot
+          git add -f db/copilot.db pricing/xgb-v1.pkl pricing/xgb-v1.features.json dashboards/powerbi/data/
+          git commit -m "weekly snapshot $(date -u +%Y-%m-%d)" || echo "no changes"
+          git push --force origin data-snapshot
