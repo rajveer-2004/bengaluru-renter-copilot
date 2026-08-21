@@ -16,14 +16,49 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import urllib.request
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 
 REPO_ROOT   = Path(__file__).resolve().parents[2]
-DB_PATH     = REPO_ROOT / "db" / "copilot.db"
+LOCAL_DB    = REPO_ROOT / "db" / "copilot.db"
 MODEL_META  = REPO_ROOT / "pricing" / "xgb-v1.features.json"
+
+# On Streamlit Cloud / HF Spaces the DB isn't in the repo (gitignored, too
+# volatile). GitHub Actions cron pushes fresh snapshots to the
+# `data-snapshot` branch every Sunday. If we can't find the DB locally,
+# fetch the latest snapshot from that branch's raw URL and cache it under
+# /tmp so subsequent runs on the same container are instant.
+SNAPSHOT_DB_URL = (
+    "https://raw.githubusercontent.com/rajveer-2004/"
+    "bengaluru-renter-copilot/data-snapshot/db/copilot.db"
+)
+CLOUD_DB = Path("/tmp/copilot.db")
+
+
+@st.cache_resource(ttl=3600)
+def resolve_db_path() -> Path:
+    """Prefer local DB (developer laptop). Fall back to fetching the
+    data-snapshot branch's copy of the DB into /tmp on cloud deploys.
+    Cached 1h so we don't hit the raw URL on every rerun.
+    """
+    if LOCAL_DB.exists():
+        return LOCAL_DB
+    try:
+        urllib.request.urlretrieve(SNAPSHOT_DB_URL, CLOUD_DB)
+        return CLOUD_DB
+    except Exception as e:  # noqa: BLE001
+        st.error(
+            f"No local DB and couldn't fetch snapshot: {e}\n"
+            f"Wait for the weekly cron to push a fresh snapshot to the "
+            f"data-snapshot branch, or run the pipeline locally."
+        )
+        st.stop()
+
+
+DB_PATH = resolve_db_path()
 
 st.set_page_config(
     page_title="Bengaluru Renter's Copilot",
