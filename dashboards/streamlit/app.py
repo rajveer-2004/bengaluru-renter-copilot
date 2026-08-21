@@ -58,14 +58,14 @@ def resolve_db_path() -> Path:
         st.stop()
 
 
-DB_PATH = resolve_db_path()
-
 st.set_page_config(
     page_title="Bengaluru Renter's Copilot",
     page_icon="🏠",
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+DB_PATH = resolve_db_path()
 
 
 # ---------------------------------------------------------------------------
