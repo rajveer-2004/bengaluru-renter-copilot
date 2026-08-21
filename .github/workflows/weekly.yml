@@ -27,13 +27,15 @@ jobs:
       - name: Install Playwright + Chromium
         run: playwright install --with-deps chromium
 
-      - name: Initialize DB
-        run: python scripts/init_db.py
-
-      - name: Restore last-week DB snapshot
+      - name: Restore last-week DB snapshot (if branch exists)
         run: |
-          git fetch origin data-snapshot || true
-          git show origin/data-snapshot:db/copilot.db > db/copilot.db 2>/dev/null || echo "fresh init"
+          git fetch origin data-snapshot 2>/dev/null && \
+            git show origin/data-snapshot:db/copilot.db > db/copilot.db || \
+            echo "no snapshot branch yet, will init fresh"
+        continue-on-error: true
+
+      - name: Initialize DB (creates schema if missing)
+        run: python scripts/init_db.py
 
       - name: Scrape NoBroker (14 core localities)
         run: |
